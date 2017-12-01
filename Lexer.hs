@@ -1,6 +1,13 @@
 {-# LANGUAGE MultiWayIf #-}
 
-module Lexer where
+module Lexer
+	( Token (..)
+	, ParT (..)
+	, Name (..)
+	, qualify
+	, tokenStream
+	, lexer
+	) where
 
 import Control.Monad
 import Data.Monoid
@@ -25,6 +32,11 @@ keywords =
 	, "case"
 	, "of"
 	, "class"
+	, "->"
+	, "<-"
+	, "|"
+	, "="
+	, "::"
 	]
 
 data Token
@@ -37,6 +49,12 @@ data Token
 	| Indent Int
 	| LParens ParT
 	| RParens ParT
+	deriving (Show, Eq)
+
+data ParT
+	= Parenthesis
+	| SquareBracket
+	| CurlyBracket
 	deriving (Show, Eq)
 
 data Name = Name 
@@ -53,26 +71,22 @@ instance Show Name where
 
 qualify (Name qs n i) q = Name (q:qs) n i
 
-data ParT
-	= Parenthesis
-	| SquareBracket
-	| CurlyBracket
-	deriving (Show, Eq)
-
 lexer file = do
 	f <- readFile file
 	return $ parse tokenStream file f
 
 tokenStream =
 	let token
-		=   qIdentifier
-		<|> infixfn
-		<|> numLit
-		<|> indent
-		<|> lParens <|> rParens
-		<|> strLit
-		<|> chrLit
-		<|> lambda
+		= liftM2 (,) getPosition
+			(   qIdentifier
+			<|> infixfn
+			<|> numLit
+			<|> indent
+			<|> lParens <|> rParens
+			<|> strLit
+			<|> chrLit
+			<|> lambda
+			)
 		<|> (char ' ' >> token)
 	in do
 		toks <- many token
