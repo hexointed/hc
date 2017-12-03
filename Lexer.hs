@@ -3,8 +3,7 @@
 module Lexer
 	( Token (..)
 	, ParT (..)
-	, Name (..)
-	, qualify
+	, module Util
 	, tokenStream
 	, lexer
 	) where
@@ -14,6 +13,8 @@ import Data.Monoid
 import Data.Char
 import Text.ParserCombinators.Parsec
 import Text.Parsec.Prim (ParsecT)
+
+import Util
 
 opChar = "!#$%^*+-/:;<=>?@^_|~.,"
 lAlphaChar = "abcdefghijklmnopqrstuvwxyz"
@@ -32,6 +33,7 @@ keywords =
 	, "case"
 	, "of"
 	, "class"
+	, "instance"
 	, "->"
 	, "<-"
 	, "|"
@@ -57,27 +59,13 @@ data ParT
 	| CurlyBracket
 	deriving (Show, Eq)
 
-data Name = Name 
-	{ qualifiers :: [String]
-	, name :: String
-	, infixn :: Bool
-	}
-	deriving Eq
-
-instance Show Name where
-	show (Name qs n i)
-		| i         = "`" ++ foldr (\a b -> a ++ "." ++ b) [] qs ++ n ++ "`"
-		| otherwise = show $ foldr (\a b -> a ++ "." ++ b) [] qs ++ n
-
-qualify (Name qs n i) q = Name (q:qs) n i
-
 lexer file = do
 	f <- readFile file
 	return $ parse tokenStream file f
 
 tokenStream =
 	let token
-		= liftM2 (,) getPosition
+		= liftM2 (,) (fmap fromSP getPosition)
 			(   qIdentifier
 			<|> infixfn
 			<|> numLit
