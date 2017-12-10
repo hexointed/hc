@@ -6,20 +6,22 @@ module Lexer
 	, module Util
 	, tokenStream
 	, lexer
+	, deSugar
 	) where
 
-import Control.Monad
-import Data.Monoid
 import Data.Char
-import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec hiding (Parser)
 import Text.Parsec.Prim (ParsecT)
+import Data.Functor.Identity
 
 import Util
+import AST
+import DeSugar
 
-opChar = "!#$%^*+-/:;<=>?@^_|~.,"
+opChar = "!#$%^*+-/:<=>?@^_|~.,"
 lAlphaChar = "abcdefghijklmnopqrstuvwxyz"
 uAlphaChar = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-numChar = "0123456789"
+numChar = "0123456789\'"
 alphaNumChar = lAlphaChar ++ uAlphaChar ++ numChar
 keywords = 
 	[ "import"
@@ -27,11 +29,11 @@ keywords =
 	, "where"
 	, "data"
 	, "deriving"
-	, "let"
-	, "in"
 	, "do"
 	, "case"
 	, "of"
+	, "let"
+	, "in"
 	, "class"
 	, "instance"
 	, "->"
@@ -41,54 +43,44 @@ keywords =
 	, "::"
 	]
 
-data Token
-	= Keyword String
-	| Identifier Name
-	| NumLit Integer
-	| StrLit String
-	| ChrLit Char
-	| Lambda
-	| Indent Int
-	| LParens ParT
-	| RParens ParT
-	deriving (Show, Eq)
+type Parser a = ParsecT String () Identity (a ())
 
-data ParT
-	= Parenthesis
-	| SquareBracket
-	| CurlyBracket
-	deriving (Show, Eq)
-
-lexer file = do
-	f <- readFile file
-	return $ parse tokenStream file f
+lexer :: String -> IO [Token ()]
+lexer str = do
+	f <- deSugar str
+	case runParser tokenStream () "" f of
+		Right t -> return t
+		Left e  -> fail (show e)
 
 tokenStream =
-	let token
-		= liftM2 (,) (fmap fromSP getPosition)
-			(   qIdentifier
+	let token =
+			    qIdentifier
 			<|> infixfn
-			<|> numLit
-			<|> indent
 			<|> lParens <|> rParens
 			<|> strLit
 			<|> chrLit
+			<|> numLit
 			<|> lambda
-			)
-		<|> (char ' ' >> token)
+			<|> semic
 	in do
-		toks <- many token
+		many whitespace
+		toks <- many $ do
+			t <- token
+			many whitespace
+			return t
 		eof
 		return toks
 
-qIdentifier :: Monad m => ParsecT [Char] st m Token
+whitespace = char ' ' <|> char '\t' <|> char '\n'
+
+qIdentifier :: Parser Token
 qIdentifier = do
 	Name qs n i <- qualifiedName
 	if n `Prelude.elem` keywords
-		then return (Keyword n)
-		else return (Identifier $ Name qs n i)
+		then return $ Keyword () n
+		else return $ Identifier () (Name qs n i)
 
-qualifiedName :: Monad m => ParsecT [Char] st m Name
+qualifiedName :: ParsecT [Char] () Identity Name
 qualifiedName = do
 	r <- fmap Left identifier <|> fmap Right operator
 	case r of
@@ -104,30 +96,30 @@ qualifiedName = do
 						return (qualify qn (name n))
 				
 
-operator :: Monad m => ParsecT [Char] st m Name
+operator :: ParsecT [Char] () Identity Name
 operator = do
 	op <- many1 (oneOf opChar)
 	return (Name [] op True)
 
-identifier :: Monad m => ParsecT [Char] st m Name
+identifier :: ParsecT [Char] () Identity Name
 identifier = do
 	i <- oneOf uAlphaChar <|> oneOf lAlphaChar
 	is <- many (oneOf alphaNumChar)
 	return (Name [] (i:is) False)
 
-infixfn :: Monad m => ParsecT [Char] st m Token
+infixfn :: Parser Token
 infixfn = do 
 		char '`'
 		op <- qualifiedName
 		char '`'
-		return (Identifier $ op { infixn = True })
+		return $ Identifier () (op { infixn = True })
 
-numLit :: Monad m => ParsecT [Char] st m Token
+numLit :: Parser Token
 numLit = do
 	i <- many (oneOf numChar)
 	case reads i of
-		[(a,_)] -> return (NumLit a)
-		_       -> fail "Expected Integer literal"
+		[(a,[])] -> return $ LitTok () (IntLit a)
+		_        -> fail "Expected Integer literal"
 
 escSeq :: Monad m => ParsecT [Char] st m Char
 escSeq = do
@@ -141,47 +133,43 @@ escSeq = do
 		't'  -> return '\t'
 		_    -> fail $ "Unknown Escape sequence \\" ++ c:[]
 
-strLit :: Monad m => ParsecT [Char] st m Token
+strLit :: Parser Token
 strLit = do
 	char '\"'
 	str <- many (escSeq <|> noneOf "\"")
 	char '\"'
-	return (StrLit str)
+	return $ LitTok () (StrLit str)
 
-chrLit :: Monad m => ParsecT [Char] st m Token
+chrLit :: Parser Token
 chrLit = do
 	char '\''
 	chr <- (escSeq <|> noneOf "\'")
 	char '\''
-	return (ChrLit chr)
+	return $ LitTok () (ChrLit chr)
 
-indent :: Monad m => ParsecT [Char] st m Token
-indent = do
-	ls <- many1 $ do
-		ls <- char '\n'
-		ts <- many  (char '\t')
-		return (Indent $ length ts)
-	return (last ls)
-
-lParens :: Monad m => ParsecT [Char] st m Token
+lParens :: Parser Token
 lParens = do
 	p <- oneOf "([{"
 	let par = case p of
 		'(' -> Parenthesis
 		'[' -> SquareBracket
 		'{' -> CurlyBracket
-	return (LParens par)
+	return $ LParens () par
 
-rParens :: Monad m => ParsecT [Char] st m Token
+rParens :: Parser Token
 rParens = do
 	p <- oneOf ")]}"
 	let par = case p of
 		')' -> Parenthesis
 		']' -> SquareBracket
 		'}' -> CurlyBracket
-	return (RParens  par)
+	return $ RParens () par
 
-lambda :: Monad m => ParsecT [Char] st m Token
+semic = do
+	char ';'
+	return $ Semic ()
+
+lambda :: Parser Token
 lambda = do
 	char '\\'
-	return Lambda
+	return $ Lambda ()
