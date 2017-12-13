@@ -36,19 +36,21 @@ keywords =
 	, "in"
 	, "class"
 	, "instance"
+	, "infixl"
+	, "infixr"
 	, "->"
 	, "<-"
-	, "|"
 	, "="
 	, "::"
+	, "=>"
 	]
 
-type Parser a = ParsecT String () Identity (a ())
+type Parser a = ParsecT String [(Name, Fixity)] Identity (a ())
 
-lexer :: String -> IO [Token ()]
+lexer :: String -> IO ([(Name, Fixity)], [Token ()])
 lexer str = do
 	f <- deSugar str
-	case runParser tokenStream () "" f of
+	case runParser tokenStream [] "" f of
 		Right t -> return t
 		Left e  -> fail (show e)
 
@@ -69,7 +71,8 @@ tokenStream =
 			many whitespace
 			return t
 		eof
-		return toks
+		s <- getState
+		return (s, toks)
 
 whitespace = char ' ' <|> char '\t' <|> char '\n'
 
@@ -77,10 +80,23 @@ qIdentifier :: Parser Token
 qIdentifier = do
 	Name qs n i <- qualifiedName
 	if n `Prelude.elem` keywords
-		then return $ Keyword () n
+		then keyword n
 		else return $ Identifier () (Name qs n i)
 
-qualifiedName :: ParsecT [Char] () Identity Name
+keyword n = case take 5 n of
+	"infix" -> do
+		d <- case drop 5 n of
+			"l" -> return L
+			"r" -> return R
+			_   -> fail "Fixity declaration"
+		f <- char ' ' >> digit
+		n <- char ' ' >> qualifiedName
+		st <- getState
+		setState $ (n, Fixity (read [f]) d) : st
+		return $ FixDecl () n
+	k       -> return $ Keyword () k
+
+qualifiedName :: ParsecT [Char] [(Name, Fixity)] Identity Name
 qualifiedName = do
 	r <- fmap Left identifier <|> fmap Right operator
 	case r of
@@ -94,14 +110,13 @@ qualifiedName = do
 					_       -> do
 						qn <- qualifiedName
 						return (qualify qn (name n))
-				
 
-operator :: ParsecT [Char] () Identity Name
+operator :: ParsecT [Char] [(Name, Fixity)] Identity Name
 operator = do
 	op <- many1 (oneOf opChar)
 	return (Name [] op True)
 
-identifier :: ParsecT [Char] () Identity Name
+identifier :: ParsecT [Char] [(Name, Fixity)] Identity Name
 identifier = do
 	i <- oneOf uAlphaChar <|> oneOf lAlphaChar
 	is <- many (oneOf alphaNumChar)

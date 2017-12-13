@@ -43,3 +43,18 @@ instance Uncurry (a -> b -> c -> d -> r) r (a, b, c, d) where
 fromFile file t = do
 	f <- readFile file
 	t f
+
+data Fixity = Fixity
+	{ fix :: Int
+	, assoc :: T
+	}
+	deriving (Show, Eq)
+
+data T = L | R
+	deriving (Show, Eq)
+
+inc (Fixity i a) = Fixity (i + 1) a
+
+instance Ord Fixity where
+	Fixity i a <= Fixity j b = i <= j
+

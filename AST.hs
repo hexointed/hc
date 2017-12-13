@@ -32,6 +32,7 @@ data Token a
 	| LParens    a ParT
 	| RParens    a ParT
 	| Semic      a
+	| FixDecl    a Name
 	deriving (Eq, Functor)
 
 data Literal
@@ -76,6 +77,7 @@ instance Show a => Show (Token a) where
 	show (LParens    a n) = showAnn "LParens    " a ++ showSub n
 	show (RParens    a n) = showAnn "RParens    " a ++ showSub n
 	show (Semic      a  ) = showAnn "Semic      " a
+	show (FixDecl    a n) = showAnn "FixDecl    " a ++ showSub n
 
 class Ast a where
 	simplify :: a f -> a f
